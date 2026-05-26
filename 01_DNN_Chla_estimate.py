@@ -51,10 +51,10 @@ def img_est_chl(data, model, x_scaler, y_scaler):
 
 if __name__ == '__main__':
     # loading models and scalers for new tf version
-    x_scaler = joblib.load('benchmarking/scalers/applied/viirs_rrs_x_scaler_v3.pkl')
-    y_scaler = joblib.load('benchmarking/scalers/applied/viirs_chl_scaler_v3.pkl')
-    dnn_model = load_model('benchmarking/models/applied/viirsn_chla_model_dnn_v3.keras')
-    for year in range(2022, 2026):
+    x_scaler = joblib.load('benchmarking/viirs_rrs_x_scaler_v3.pkl')
+    y_scaler = joblib.load('benchmarking/viirs_chl_scaler_v3.pkl')
+    dnn_model = load_model('benchmarking/modelsviirsn_chla_model_dnn_v3.keras')
+    for year in range(2012, 2026):
         input_dir = rf'F:\CLARA_Daily_SNAP\msl12\{year}'
         out_dir = rf'F:\CLARA_Daily_SNAP\chla\{year}'
         os.makedirs(out_dir, exist_ok=True)
@@ -64,29 +64,16 @@ if __name__ == '__main__':
             base_file = os.path.basename(nc_file)
             doy = int(base_file[5:8])
             hour = int(base_file[8:10])
-            if hour>7:
-                # we did not need 08 hour image
-                continue
-            if (hour < 4) or (hour > 6):
-                # if NorthEast or TPL, some IMXL was processed, was not good methods.
-                if (doy < 60) or (doy > 335):
-                    # exclude absolute ice
-                    continue
             out_file = os.path.join(out_dir, base_file.replace('.nc', '_Chla.nc'))
             if os.path.exists(out_file):
                 print(out_file + ' existing. skip...')
                 continue
             data, lat, lon = imread_noaa_l2(nc_file)
             #
-            # chl_rf = img_est_chl(data, rf_model, x_scaler, y_scaler)
-            # nc_write(out_file, 'chla_rf', np.rot90(chl_rf, 2), new=False)
-            # chl_svr = img_est_chl(data, svr_model, x_scaler, y_scaler)
-            # nc_write(out_file, 'chla_svr', np.rot90(chl_svr, 2), new=False)
-            #
-            # time_s = time.process_time()
+            time_s = time.process_time()
             chl_dnn = img_est_chl(data, dnn_model, x_scaler, y_scaler)
-            # time_e = time.process_time()
-            # print(time_e-time_s)
+            time_e = time.process_time()
+            print(time_e-time_s)
             nc_write(out_file, 'chla_dnn', np.rot90(chl_dnn, 2), new=True)
             nc_write(out_file, 'latitude', np.rot90(lat, 2), new=False)
             nc_write(out_file, 'longitude', np.rot90(lon, 2), new=False)
