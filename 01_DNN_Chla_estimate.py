@@ -1,3 +1,6 @@
+"""
+Using the DNN model to generate Chl-a via Cao et al. (2024) approach
+"""
 import os
 import joblib
 import numpy as np
