@@ -1,3 +1,6 @@
+"""
+Using SNAP and GPT tool to generate daily composite of products.
+"""
 import os
 from glob import glob
 from datetime import datetime
