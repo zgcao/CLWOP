@@ -1,2 +1,2 @@
-# CLARA
-CLARA (China Lake optical Analysis Ready Attributes) model, scripts, and products
+# CLWOP
+CLWOP (China Lake Optical Water Properties) model, scripts, and products
