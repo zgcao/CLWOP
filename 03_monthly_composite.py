@@ -136,15 +136,13 @@ def export_to_netcdf(out_nc_path, data_dict, transform, year, month_str):
             for k, v in var_attributes[var_name].items():
                 setattr(nc_var, k, v)
                 
-        nc.title = "CLWOP: China Lakes Water Optical Property (Hybrid Monthly Synthesis)"
+        nc.title = "CLWOP: China Lakes Water Optical Property"
         nc.synthesis_method = "IQR filtered + Temporal Log-Mean (if N>=3), else Temporal Median"
         nc.date_created = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
         nc.year = str(year)
         nc.month = str(month_str)
 
 def main():
-    print("开始执行 CLWOP 日均到月均合成任务...\n")
-    
     daily_dir = r"G:\zsd_spm_daily"
     out_dir = r"E:\Satellitedata\CLWOP\monthly_zsd_spm_v3"
     
@@ -153,7 +151,7 @@ def main():
     
     os.makedirs(out_dir, exist_ok=True)
     
-    print("正在加载并解析湖泊矢量掩膜...")
+    print("Load Lake Boundary Shapefiles...")
     def load_geometries(shp_path):
         gdf = gpd.read_file(shp_path)
         if gdf.crs != 'EPSG:4326':
@@ -173,23 +171,21 @@ def main():
             out_nc_path = os.path.join(out_dir, out_nc_name)
             
             if os.path.exists(out_nc_path):
-                print(f"{out_nc_name} 已存在，跳过。")
+                print(f"{out_nc_name} Existed. Skippted.")
                 continue
                 
-            print(f"\n开始处理: {year} 年 {month_str} 月")
+            print(f"\nStart Processing: {year} 年 {month_str} 月")
             
             if 5 <= month <= 10:
                 current_geo = geo_all
-                print("   [掩膜策略] 5-10月 -> 使用全范围中国湖泊")
             else:
                 current_geo = geo_east
-                print("   [掩膜策略] 11-4月 -> 使用东部湖区(排除冰封区)")
                 
             monthly_data_dict = {}
             master_transform = None
             
             for var in vars_to_process:
-                print(f"   --> 正在合成 {var}...")
+                print(f"   --> Compositing {var}...")
                 
                 result_array, transform = synthesize_advanced_monthly(
                     year, month_str, var, daily_dir, current_geo
@@ -200,15 +196,15 @@ def main():
                     if master_transform is None:
                         master_transform = transform
                 else:
-                    print(f"      [跳过] 无有效日均数据。")
+                    print(f"      [Skip] No avaiable daily data.")
             
             if monthly_data_dict:
                 export_to_netcdf(out_nc_path, monthly_data_dict, master_transform, year, month_str)
-                print(f"   成功生成并导出: {out_nc_name}")
+                print(f"   Data Exported: {out_nc_name}")
             else:
-                print(f"   {year} 年 {month_str} 月没有任何有效数据，放弃生成。")
+                print(f"   {year}{month_str} did not have any data.")
 
-    print("\n所有月均数据合成任务圆满完成！")
+    print("\n Finished!")
 
 if __name__ == '__main__':
     main()
