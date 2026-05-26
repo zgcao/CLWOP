@@ -1,0 +1,236 @@
+import os
+import glob
+import numpy as np
+import rasterio
+from rasterio.windows import Window, from_bounds
+from rasterio.features import geometry_mask
+import geopandas as gpd
+from netCDF4 import Dataset
+from datetime import datetime
+import warnings
+
+warnings.filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
+warnings.filterwarnings('ignore', category=RuntimeWarning)
+
+# ==========================================
+# 1. 核心高阶合成函数 (极速优化版)
+# ==========================================
+def synthesize_advanced_monthly(year, month_str, var_name, daily_dir, geometries):
+    VALID_BOUNDS = {
+        'spm': (0.1, 500.0),
+        'Zsd': (0.01, 30.0)
+    }
+    vmin, vmax = VALID_BOUNDS[var_name]
+    
+    img_name_map = {
+        'spm': 'spm.img',
+        'Zsd': 'Zsd.img'
+    }
+    target_img_name = img_name_map.get(var_name, f"{var_name}.img")
+    
+    year_dir = os.path.join(daily_dir, str(year))
+    search_pattern = os.path.join(year_dir, f"V{year}{month_str}*_spm_zsd_mosaic.data")
+    
+    data_folders = glob.glob(search_pattern)
+    daily_files = []
+    for folder in data_folders:
+        img_path = os.path.join(folder, target_img_name)
+        if os.path.exists(img_path):
+            daily_files.append(img_path)
+    if not daily_files:
+        return None, None
+    # print(daily_files)  
+    # 初始化提速变量
+    lake_mask_2d = None
+    window = None
+    out_transform = None
+    out_shape = None
+    stacked_lake_pixels = []
+    
+    print(f"      -> 找到 {len(daily_files)} 天数据，正在极速融合...")
+
+    for file in daily_files:
+        try:
+            with rasterio.open(file) as src:
+                # 【提速优化 1】：只在第一天计算几何边界与掩膜，避免 30 次重复运算
+                if lake_mask_2d is None:
+                    # 1. 计算包含所有湖泊的最小外接矩形 (Window)
+                    left, bottom, right, top = gpd.GeoSeries(geometries).total_bounds
+                    window = from_bounds(left, bottom, right, top, transform=src.transform)
+                    window = window.intersection(Window(0, 0, src.width, src.height))
+                    window = window.round_lengths().round_offsets()
+                    
+                    out_transform = rasterio.windows.transform(window, src.transform)
+                    out_shape = (int(window.height), int(window.width))
+                    
+                    # 2. 生成固定的 2D 布尔掩膜矩阵 (True 表示是水体，False 表示是陆地)
+                    lake_mask_2d = geometry_mask(
+                        geometries, out_shape=out_shape, transform=out_transform, invert=True
+                    )
+                
+                # 【提速优化 2】：只读取外接矩形范围，极速加载
+                daily_array = src.read(1, window=window).astype(np.float32)
+                
+                # 【提速优化 3】：把 2D 矩阵压缩成只包含有效湖泊像元的 1D 序列 (去除了 99% 陆地数据)
+                lake_pixels = daily_array[lake_mask_2d]
+                
+                # 【物理底线过滤】：在 1D 极简数组上过滤，瞬间完成
+                lake_pixels[(lake_pixels < vmin) | (lake_pixels > vmax)] = np.nan
+                stacked_lake_pixels.append(lake_pixels)
+                
+        except Exception as e:
+            print(f"      [警告] 读取 {os.path.basename(file)} 失败: {e}")
+            continue   
+    if not stacked_lake_pixels:
+        return None, None
+
+    # 将数据转为 2D 矩阵
+    data_2d = np.array(stacked_lake_pixels)
+    # ==========================================
+    valid_count = np.sum(~np.isnan(data_2d), axis=0)
+    
+    q25 = np.nanpercentile(data_2d, 25, axis=0)
+    q75 = np.nanpercentile(data_2d, 75, axis=0)
+    iqr = q75 - q25
+    
+    lower_bound = q25 - 1.5 * iqr
+    upper_bound = q75 + 1.5 * iqr
+    
+    data_iqr_filtered = np.where(
+        (data_2d >= lower_bound) & (data_2d <= upper_bound), 
+        data_2d, 
+        np.nan
+    )
+    
+    log_mean_result = np.exp(np.nanmean(np.log(data_iqr_filtered), axis=0))
+    median_result = np.nanmedian(data_2d, axis=0)
+    
+    final_1d = np.where(valid_count >= 3, log_mean_result, median_result)
+    
+    # ==========================================
+    # 将 1D 数组塞回原来的 2D 空间位置
+    # ==========================================
+    final_monthly_image = np.full(out_shape, np.nan, dtype=np.float32)
+    final_monthly_image[lake_mask_2d] = final_1d
+    
+    return final_monthly_image, out_transform
+
+# ==========================================
+# 2. NetCDF 标准化导出函数 (保持不变)
+# ==========================================
+def export_to_netcdf(out_nc_path, data_dict, transform, year, month_str):
+    NODATA_VALUE = -32767.0
+    ref_var = next(iter(data_dict.values()))
+    height, width = ref_var.shape
+    
+    lons = transform.c + transform.a * np.arange(width) + transform.a / 2
+    lats = transform.f + transform.e * np.arange(height) + transform.e / 2
+    
+    with Dataset(out_nc_path, 'w', format='NETCDF4') as nc:
+        nc.createDimension('lat', height)
+        nc.createDimension('lon', width)
+        
+        lon_var = nc.createVariable('lon', 'f4', ('lon',))
+        lon_var[:] = lons
+        lon_var.standard_name = 'longitude'
+        lon_var.units = 'degrees_east'
+        
+        lat_var = nc.createVariable('lat', 'f4', ('lat',))
+        lat_var[:] = lats
+        lat_var.standard_name = 'latitude'
+        lat_var.units = 'degrees_north'
+        
+        var_attributes = {
+            'spm': {'long_name': 'Suspended Particulate Matter', 'units': 'mg L-1'},
+            'Zsd': {'long_name': 'Secchi Disk Depth', 'units': 'm'}
+        }
+        
+        for var_name, array_2d in data_dict.items():
+            array_clean = np.where(np.isnan(array_2d), NODATA_VALUE, array_2d)
+            nc_var = nc.createVariable(
+                var_name, 'f4', ('lat', 'lon'), 
+                zlib=True, complevel=4, fill_value=NODATA_VALUE
+            )
+            nc_var[:] = array_clean
+            for k, v in var_attributes[var_name].items():
+                setattr(nc_var, k, v)
+                
+        nc.title = "CLWOP: China Lakes Water Optical Property (Hybrid Monthly Synthesis)"
+        nc.synthesis_method = "IQR filtered + Temporal Log-Mean (if N>=3), else Temporal Median"
+        nc.date_created = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        nc.year = str(year)
+        nc.month = str(month_str)
+
+# ==========================================
+# 3. 主函数 (Main Pipeline) (保持不变)
+# ==========================================
+def main():
+    print("开始执行 CLWOP 日均到月均合成任务...\n")
+    
+    daily_dir = r"G:\zsd_spm_daily"
+    out_dir = r"E:\Satellitedata\CLWOP\monthly_zsd_spm_v3"
+    
+    shp_all_path = r"data\boundary\china_lakes_gte10sqkm_epsg4326.shp"
+    shp_east_path = r"data\boundary\china_lakes_gte10sqkm_EastRegion_epsg4326.shp"
+    
+    os.makedirs(out_dir, exist_ok=True)
+    
+    print("正在加载并解析湖泊矢量掩膜...")
+    def load_geometries(shp_path):
+        gdf = gpd.read_file(shp_path)
+        if gdf.crs != 'EPSG:4326':
+            gdf = gdf.to_crs('EPSG:4326')
+        return gdf.geometry.values
+        
+    geo_all = load_geometries(shp_all_path)
+    geo_east = load_geometries(shp_east_path)
+    
+    vars_to_process = ['spm', 'Zsd']
+    
+    for year in range(2012, 2026):  
+        for month in range(1, 13):
+            month_str = f"{month:02d}"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   
+            
+            out_nc_name = f"CLWOP_VIIRS_{year}M{month_str}_monthly_v3.nc"
+            out_nc_path = os.path.join(out_dir, out_nc_name)
+            
+            if os.path.exists(out_nc_path):
+                print(f"{out_nc_name} 已存在，跳过。")
+                continue
+                
+            print(f"\n开始处理: {year} 年 {month_str} 月")
+            
+            if 5 <= month <= 10:
+                current_geo = geo_all
+                print("   [掩膜策略] 5-10月 -> 使用全范围中国湖泊")
+            else:
+                current_geo = geo_east
+                print("   [掩膜策略] 11-4月 -> 使用东部湖区(排除冰封区)")
+                
+            monthly_data_dict = {}
+            master_transform = None
+            
+            for var in vars_to_process:
+                print(f"   --> 正在合成 {var}...")
+                
+                result_array, transform = synthesize_advanced_monthly(
+                    year, month_str, var, daily_dir, current_geo
+                )
+                
+                if result_array is not None:
+                    monthly_data_dict[var] = result_array
+                    if master_transform is None:
+                        master_transform = transform
+                else:
+                    print(f"      [跳过] 无有效日均数据。")
+            
+            if monthly_data_dict:
+                export_to_netcdf(out_nc_path, monthly_data_dict, master_transform, year, month_str)
+                print(f"   成功生成并导出: {out_nc_name}")
+            else:
+                print(f"   {year} 年 {month_str} 月没有任何有效数据，放弃生成。")
+
+    print("\n所有月均数据合成任务圆满完成！")
+
+if __name__ == '__main__':
+    main()
