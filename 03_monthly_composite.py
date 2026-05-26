@@ -12,9 +12,6 @@ import warnings
 warnings.filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
 warnings.filterwarnings('ignore', category=RuntimeWarning)
 
-# ==========================================
-# 1. 核心高阶合成函数 (极速优化版)
-# ==========================================
 def synthesize_advanced_monthly(year, month_str, var_name, daily_dir, geometries):
     VALID_BOUNDS = {
         'spm': (0.1, 500.0),
@@ -39,22 +36,17 @@ def synthesize_advanced_monthly(year, month_str, var_name, daily_dir, geometries
             daily_files.append(img_path)
     if not daily_files:
         return None, None
-    # print(daily_files)  
-    # 初始化提速变量
     lake_mask_2d = None
     window = None
     out_transform = None
     out_shape = None
     stacked_lake_pixels = []
-    
     print(f"      -> 找到 {len(daily_files)} 天数据，正在极速融合...")
 
     for file in daily_files:
         try:
             with rasterio.open(file) as src:
-                # 【提速优化 1】：只在第一天计算几何边界与掩膜，避免 30 次重复运算
                 if lake_mask_2d is None:
-                    # 1. 计算包含所有湖泊的最小外接矩形 (Window)
                     left, bottom, right, top = gpd.GeoSeries(geometries).total_bounds
                     window = from_bounds(left, bottom, right, top, transform=src.transform)
                     window = window.intersection(Window(0, 0, src.width, src.height))
@@ -62,24 +54,17 @@ def synthesize_advanced_monthly(year, month_str, var_name, daily_dir, geometries
                     
                     out_transform = rasterio.windows.transform(window, src.transform)
                     out_shape = (int(window.height), int(window.width))
-                    
-                    # 2. 生成固定的 2D 布尔掩膜矩阵 (True 表示是水体，False 表示是陆地)
                     lake_mask_2d = geometry_mask(
                         geometries, out_shape=out_shape, transform=out_transform, invert=True
                     )
                 
-                # 【提速优化 2】：只读取外接矩形范围，极速加载
                 daily_array = src.read(1, window=window).astype(np.float32)
-                
-                # 【提速优化 3】：把 2D 矩阵压缩成只包含有效湖泊像元的 1D 序列 (去除了 99% 陆地数据)
                 lake_pixels = daily_array[lake_mask_2d]
-                
-                # 【物理底线过滤】：在 1D 极简数组上过滤，瞬间完成
                 lake_pixels[(lake_pixels < vmin) | (lake_pixels > vmax)] = np.nan
                 stacked_lake_pixels.append(lake_pixels)
                 
         except Exception as e:
-            print(f"      [警告] 读取 {os.path.basename(file)} 失败: {e}")
+            print(f"      读取 {os.path.basename(file)} 失败: {e}")
             continue   
     if not stacked_lake_pixels:
         return None, None
@@ -88,7 +73,6 @@ def synthesize_advanced_monthly(year, month_str, var_name, daily_dir, geometries
     data_2d = np.array(stacked_lake_pixels)
     # ==========================================
     valid_count = np.sum(~np.isnan(data_2d), axis=0)
-    
     q25 = np.nanpercentile(data_2d, 25, axis=0)
     q75 = np.nanpercentile(data_2d, 75, axis=0)
     iqr = q75 - q25
@@ -104,19 +88,12 @@ def synthesize_advanced_monthly(year, month_str, var_name, daily_dir, geometries
     
     log_mean_result = np.exp(np.nanmean(np.log(data_iqr_filtered), axis=0))
     median_result = np.nanmedian(data_2d, axis=0)
-    
     final_1d = np.where(valid_count >= 3, log_mean_result, median_result)
-    
-    # ==========================================
-    # 将 1D 数组塞回原来的 2D 空间位置
-    # ==========================================
     final_monthly_image = np.full(out_shape, np.nan, dtype=np.float32)
     final_monthly_image[lake_mask_2d] = final_1d
     
     return final_monthly_image, out_transform
 
-# ==========================================
-# 2. NetCDF 标准化导出函数 (保持不变)
 # ==========================================
 def export_to_netcdf(out_nc_path, data_dict, transform, year, month_str):
     NODATA_VALUE = -32767.0
@@ -161,9 +138,6 @@ def export_to_netcdf(out_nc_path, data_dict, transform, year, month_str):
         nc.year = str(year)
         nc.month = str(month_str)
 
-# ==========================================
-# 3. 主函数 (Main Pipeline) (保持不变)
-# ==========================================
 def main():
     print("开始执行 CLWOP 日均到月均合成任务...\n")
     
