@@ -13,34 +13,32 @@ import seaborn as sns
 
 sns.set_style("ticks")
 
-ssc_colors = ['#1c3e72', '#6b8fbe', '#ffffff', '#c89643', '#8f5c05' ]
-cmap_spm = mcolors.LinearSegmentedColormap.from_list('water_sediment', ssc_colors)
 VAR_CONFIG = {
     'chlorophyll': {
         'cmap': 'viridis',
-        'vmin': 0.1, 'vmax': 100,
-        'norm': 'log',             
+        'vmin': 0.1, 'vmax': 100,  # 范围: 0.1 到 100
+        'norm': 'log',             # 启用对数拉伸
         'label': 'Chl-a ($\mu$g L$^{-1}$)'
     },
     'spm': {
-        'cmap': cmap_spm,
-        'vmin': 0.1, 'vmax': 100,
+        'cmap':  'YlGnBu_r',  # 使用自定义的悬浮物色带
+        'vmin': 0.1, 'vmax': 100,  # 范围: 0.1 到 100
         'norm': 'log',
         'label': 'SPM (mg L$^{-1}$)'
     },
     'Zsd': {
-        'cmap': 'gist_earth_r',
-        'vmin': 0.1, 'vmax': 10.0,
+        'cmap': cmocean.cm.deep,#'gist_earth_r',  # 反转的 Haline 色带，适合表示透明度
+        'vmin': 0.1, 'vmax': 10.0,  # 透明度也可以用对数，或者保持线性
         'norm': 'log',
         'label': 'Zsd (m)'
     }
 }
 LAKES_BBOX = {
+    'Qinghai':    [99.40, 100.95, 36.40, 37.40],
     'Selin Co':   [88.40, 89.40, 31.30, 32.2],
-    'Bosten':     [86.60, 87.40, 41.80, 42.15],
-    'Fuxian':     [102.75, 103.00, 24.30, 24.70],
+    'Bosten':     [86.72, 87.42, 41.75, 42.30],
     'Taihu':      [119.80, 120.70, 30.90, 31.60],
-    'Chagan':     [124.10, 124.45, 45.10, 45.40]
+    'Chagan':     [124.0, 124.45, 45.10, 45.40]
 }
 
 def plot_lakes_monthly_matrix(variable, base_dir, out_dir, year=2024):
@@ -82,20 +80,21 @@ def plot_lakes_monthly_matrix(variable, base_dir, out_dir, year=2024):
                 if cfg.get('norm') == 'log':
                     subset_data = np.where(subset_data <= 0, np.nan, subset_data)
                     norm = mcolors.LogNorm(vmin=cfg['vmin'], vmax=cfg['vmax'])
-                    im = ax.pcolormesh(
-                        subset_lon, subset_lat, subset_data, 
-                        cmap=cfg['cmap'], norm=norm, shading='auto'
-                    )
                 else:
-                    im = ax.pcolormesh(
-                        subset_lon, subset_lat, subset_data, 
-                        cmap=cfg['cmap'], vmin=cfg['vmin'], vmax=cfg['vmax'], 
-                        shading='auto'
-                    )
+                    norm = mcolors.Normalize(vmin=cfg['vmin'], vmax=cfg['vmax'])
+                origin = 'lower' if subset_lat[0] < subset_lat[-1] else 'upper'
+                im = ax.imshow(
+                    subset_data,
+                    extent=[subset_lon.min(), subset_lon.max(),
+                            subset_lat.min(), subset_lat.max()],
+                    origin=origin,
+                    cmap=cfg['cmap'],
+                    norm=norm,
+                    interpolation='bilinear',
+                    aspect='auto'
+                )
                 if im_for_cbar is None:
                     im_for_cbar = im
-
-              
                 ax.set_xticks([])
                 ax.set_yticks([])
                 ax.set_facecolor('gray')
