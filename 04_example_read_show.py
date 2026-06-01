@@ -16,19 +16,19 @@ sns.set_style("ticks")
 VAR_CONFIG = {
     'chlorophyll': {
         'cmap': 'viridis',
-        'vmin': 0.1, 'vmax': 100,  # 范围: 0.1 到 100
-        'norm': 'log',             # 启用对数拉伸
+        'vmin': 0.1, 'vmax': 100, 
+        'norm': 'log',            
         'label': 'Chl-a ($\mu$g L$^{-1}$)'
     },
     'spm': {
-        'cmap':  'YlGnBu_r',  # 使用自定义的悬浮物色带
-        'vmin': 0.1, 'vmax': 100,  # 范围: 0.1 到 100
+        'cmap':  'YlGnBu_r',  
+        'vmin': 0.1, 'vmax': 100,  
         'norm': 'log',
         'label': 'SPM (mg L$^{-1}$)'
     },
     'Zsd': {
-        'cmap': cmocean.cm.deep,#'gist_earth_r',  # 反转的 Haline 色带，适合表示透明度
-        'vmin': 0.1, 'vmax': 10.0,  # 透明度也可以用对数，或者保持线性
+        'cmap': cmocean.cm.deep,
+        'vmin': 0.1, 'vmax': 10.0,
         'norm': 'log',
         'label': 'Zsd (m)'
     }
